@@ -1,0 +1,329 @@
+import { and, desc, gte, lt, sql } from "drizzle-orm";
+import { db } from "@/db";
+import { appSettings, devices, samples, tariffHistory, tariffRates } from "@/db/schema";
+import {
+  REGION,
+  TARIFF_HISTORY,
+  TARIFF_PROFILES,
+  availableKinds,
+  zonesFor,
+  zoneAt,
+  type TariffKind,
+  type ZoneDef,
+} from "@/lib/tariffs";
+import { energyKwh, parseAgent, type DeviceKind } from "@/lib/power-model";
+
+let seedPromise: Promise<void> | null = null;
+
+/** Идемпотентная загрузка справочника тарифов и настроек по умолчанию. */
+export function ensureSeed(): Promise<void> {
+  if (!seedPromise) {
+    seedPromise = runSeed().catch((err) => {
+      seedPromise = null;
+      throw err;
+    });
+  }
+  return seedPromise;
+}
+
+async function runSeed() {
+  const rows = TARIFF_PROFILES.flatMap((profile) =>
+    profile.versions.flatMap((version) =>
+      (Object.keys(version.kinds) as TariffKind[]).flatMap((kind) =>
+        (version.kinds[kind] ?? []).map((zone) => ({
+          id: `${profile.id}:${kind}:${zone.id}:${version.validFrom}`,
+          profileId: profile.id,
+          profileTitle: profile.title,
+          clause: profile.clause,
+          legal: profile.legal,
+          kind,
+          zoneId: zone.id,
+          zoneLabel: zone.label,
+          rate: zone.rate,
+          fromHour: zone.from,
+          toHour: zone.to,
+          validFrom: version.validFrom,
+          validTo: version.validTo,
+        })),
+      ),
+    ),
+  );
+
+  await db
+    .insert(tariffRates)
+    .values(rows)
+    .onConflictDoNothing({ target: tariffRates.id });
+
+  await db
+    .insert(tariffHistory)
+    .values(TARIFF_HISTORY)
+    .onConflictDoNothing({ target: tariffHistory.year });
+
+  await db
+    .insert(appSettings)
+    .values({ id: 1, profileId: "gas", kind: "single" })
+    .onConflictDoNothing({ target: appSettings.id });
+}
+
+export interface Settings {
+  profileId: string;
+  kind: TariffKind;
+  retentionDays: number;
+}
+
+export async function getSettings(): Promise<Settings> {
+  await ensureSeed();
+  const rows = await db.select().from(appSettings).where(sql`${appSettings.id} = 1`).limit(1);
+  const row = rows[0];
+  const profileId = row?.profileId && TARIFF_PROFILES.some((p) => p.id === row.profileId)
+    ? row.profileId
+    : "gas";
+  const kinds = availableKinds(profileId);
+  const kind: TariffKind = row && kinds.includes(row.kind as TariffKind)
+    ? (row.kind as TariffKind)
+    : kinds[0] ?? "single";
+  return { profileId, kind, retentionDays: row?.retentionDays ?? 21 };
+}
+
+/** Смена тарифа/вида учёта — пересчитываем стоимость всей накопленной истории. */
+export async function updateSettings(profileId: string, kind: TariffKind) {
+  await ensureSeed();
+  const kinds = availableKinds(profileId);
+  const resolvedKind: TariffKind = kinds.includes(kind) ? kind : kinds[0] ?? "single";
+  const zones = zonesFor(profileId, resolvedKind);
+
+  await db
+    .update(appSettings)
+    .set({ profileId, kind: resolvedKind, updatedAt: new Date() })
+    .where(sql`${appSettings.id} = 1`);
+
+  if (zones.length) {
+    const hourExpr = sql`EXTRACT(HOUR FROM ${samples.ts} AT TIME ZONE ${REGION.timezone})::int`;
+    const rateExpr = sql`(${buildCase(hourExpr, zones, "rate")})::double precision`;
+    const zoneExpr = sql`(${buildCase(hourExpr, zones, "zone")})::text`;
+    await db.execute(sql`
+      UPDATE ${samples}
+      SET tariff_rate = ${rateExpr},
+          tariff_zone = ${zoneExpr},
+          cost = ${samples.kwh} * ${rateExpr}
+    `);
+  }
+
+  return { profileId, kind: resolvedKind, zones };
+}
+
+function buildCase(hourExpr: ReturnType<typeof sql>, zones: ZoneDef[], pick: "rate" | "zone") {
+  const fallback = pick === "rate" ? sql`${zones[0].rate}` : sql`${zones[0].id}`;
+  const whens = zones
+    .filter((z) => z.from !== null && z.to !== null)
+    .map((z) => {
+      const value = pick === "rate" ? sql`${z.rate}` : sql`${z.id}`;
+      const from = z.from as number;
+      const to = z.to as number;
+      const cond =
+        from < to
+          ? sql`${hourExpr} >= ${from} AND ${hourExpr} < ${to}`
+          : sql`${hourExpr} >= ${from} OR ${hourExpr} < ${to}`;
+      return sql`WHEN ${cond} THEN ${value}`;
+    });
+  if (!whens.length) return fallback;
+  return sql`CASE ${sql.join(whens, sql` `)} ELSE ${fallback} END`;
+}
+
+export function minskDayStart(offsetDays = 0): Date {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: REGION.timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const utc = Date.UTC(get("year"), get("month") - 1, get("day") + offsetDays, 0, 0, 0);
+  return new Date(utc - REGION.utcOffsetHours * 3_600_000);
+}
+
+export function minskMonthStart(): Date {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: REGION.timezone,
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(now);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const utc = Date.UTC(get("year"), get("month") - 1, 1, 0, 0, 0);
+  return new Date(utc - REGION.utcOffsetHours * 3_600_000);
+}
+
+export interface IngestPayload {
+  deviceId: string;
+  name?: string;
+  kind?: DeviceKind;
+  spec?: Partial<{ cpuTdpW: number; gpuTdpW: number; displayW: number; batteryWh: number }>;
+  meta?: {
+    userAgent?: string;
+    cores?: number;
+    memoryGb?: number;
+    screen?: string;
+    timezone?: string;
+  };
+  ts?: string;
+  watts: number;
+  batteryWatts?: number | null;
+  cpuLoad?: number;
+  gpuLoad?: number;
+  fps?: number | null;
+  loopLagMs?: number | null;
+  longTaskMs?: number | null;
+  heapMb?: number | null;
+  batteryLevel?: number | null;
+  charging?: boolean | null;
+  screenOn?: boolean;
+  netType?: string | null;
+  downlinkMbps?: number | null;
+  rttMs?: number | null;
+  intervalMs?: number;
+}
+
+export async function ingest(payload: IngestPayload) {
+  const settings = await getSettings();
+  const zones = zonesFor(settings.profileId, settings.kind);
+  const ts = payload.ts ? new Date(payload.ts) : new Date();
+  const zone = zoneAt(zones, Number.isFinite(ts.getTime()) ? ts : new Date());
+  const agent = payload.meta?.userAgent ?? "";
+  const parsed = parseAgent(agent);
+
+  await db
+    .insert(devices)
+    .values({
+      id: payload.deviceId,
+      name: payload.name || "Новое устройство",
+      kind: payload.kind ?? "desktop",
+      platform: parsed.platform,
+      browser: parsed.browser,
+      userAgent: agent || null,
+      cores: payload.meta?.cores ?? null,
+      memoryGb: payload.meta?.memoryGb ?? null,
+      screen: payload.meta?.screen ?? null,
+      timezone: payload.meta?.timezone ?? null,
+      cpuTdpW: payload.spec?.cpuTdpW ?? 65,
+      gpuTdpW: payload.spec?.gpuTdpW ?? 8,
+      displayW: payload.spec?.displayW ?? 22,
+      batteryWh: payload.spec?.batteryWh ?? 0,
+      hasBattery: (payload.batteryLevel ?? null) !== null,
+      lastSeen: ts,
+    })
+    .onConflictDoUpdate({
+      target: devices.id,
+      set: {
+        name: payload.name || sql`${devices.name}`,
+        kind: payload.kind ?? sql`${devices.kind}`,
+        platform: parsed.platform || sql`${devices.platform}`,
+        browser: parsed.browser || sql`${devices.browser}`,
+        cores: payload.meta?.cores ?? sql`${devices.cores}`,
+        memoryGb: payload.meta?.memoryGb ?? sql`${devices.memoryGb}`,
+        screen: payload.meta?.screen ?? sql`${devices.screen}`,
+        timezone: payload.meta?.timezone ?? sql`${devices.timezone}`,
+        cpuTdpW: payload.spec?.cpuTdpW ?? sql`${devices.cpuTdpW}`,
+        gpuTdpW: payload.spec?.gpuTdpW ?? sql`${devices.gpuTdpW}`,
+        displayW: payload.spec?.displayW ?? sql`${devices.displayW}`,
+        batteryWh: payload.spec?.batteryWh ?? sql`${devices.batteryWh}`,
+        hasBattery: (payload.batteryLevel ?? null) !== null,
+        active: true,
+        lastSeen: ts,
+      },
+    });
+
+  const intervalMs = Math.min(Math.max(payload.intervalMs ?? 5000, 500), 120_000);
+  const gridWatts = Math.max(0, payload.watts || 0);
+  const batteryWatts = Math.max(0, payload.batteryWatts ?? 0);
+  const kwh = energyKwh(gridWatts, intervalMs);
+  const batteryKwh = energyKwh(batteryWatts, intervalMs);
+
+  await db.insert(samples).values({
+    deviceId: payload.deviceId,
+    ts,
+    watts: gridWatts,
+    batteryWatts: payload.batteryWatts ?? null,
+    kwh,
+    batteryKwh,
+    cpuLoad: payload.cpuLoad ?? 0,
+    gpuLoad: payload.gpuLoad ?? 0,
+    fps: payload.fps ?? null,
+    loopLagMs: payload.loopLagMs ?? null,
+    longTaskMs: payload.longTaskMs ?? null,
+    heapMb: payload.heapMb ?? null,
+    batteryLevel: payload.batteryLevel ?? null,
+    charging: payload.charging ?? null,
+    screenOn: payload.screenOn ?? true,
+    netType: payload.netType ?? null,
+    downlinkMbps: payload.downlinkMbps ?? null,
+    rttMs: payload.rttMs ?? null,
+    tariffZone: zone.id,
+    tariffRate: zone.rate,
+    cost: kwh * zone.rate,
+  });
+
+  // Периодическая чистка старого, чтобы таблица не росла бесконечно.
+  if (Math.random() < 0.03) {
+    const cutoff = new Date(Date.now() - settings.retentionDays * 86_400_000);
+    await db.delete(samples).where(lt(samples.ts, cutoff));
+  }
+
+  return { ok: true, zone: zone.id, rate: zone.rate, kwh, cost: kwh * zone.rate };
+}
+
+export async function upsertDevice(input: {
+  id: string;
+  name?: string;
+  kind?: DeviceKind;
+  cpuTdpW?: number;
+  gpuTdpW?: number;
+  displayW?: number;
+  batteryWh?: number;
+}) {
+  await ensureSeed();
+  await db
+    .update(devices)
+    .set({
+      ...(input.name ? { name: input.name } : {}),
+      ...(input.kind ? { kind: input.kind } : {}),
+      ...(typeof input.cpuTdpW === "number" ? { cpuTdpW: input.cpuTdpW } : {}),
+      ...(typeof input.gpuTdpW === "number" ? { gpuTdpW: input.gpuTdpW } : {}),
+      ...(typeof input.displayW === "number" ? { displayW: input.displayW } : {}),
+      ...(typeof input.batteryWh === "number" ? { batteryWh: input.batteryWh } : {}),
+    })
+    .where(and(sql`${devices.id} = ${input.id}`));
+}
+
+export interface SeriesPoint {
+  ts: string;
+  deviceId: string;
+  watts: number;
+  cpuLoad: number;
+  batteryWatts: number | null;
+}
+
+export async function getSeries(minutes: number): Promise<SeriesPoint[]> {
+  const since = new Date(Date.now() - minutes * 60_000);
+  const rows = await db
+    .select({
+      ts: samples.ts,
+      deviceId: samples.deviceId,
+      watts: samples.watts,
+      cpuLoad: samples.cpuLoad,
+      batteryWatts: samples.batteryWatts,
+    })
+    .from(samples)
+    .where(gte(samples.ts, since))
+    .orderBy(samples.ts)
+    .limit(6000);
+
+  return rows.map((r) => ({
+    ts: r.ts.toISOString(),
+    deviceId: r.deviceId,
+    watts: r.watts,
+    cpuLoad: r.cpuLoad,
+    batteryWatts: r.batteryWatts,
+  }));
+}
