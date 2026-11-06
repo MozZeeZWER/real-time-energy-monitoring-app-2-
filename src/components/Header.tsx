@@ -2,9 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { Activity, MapPin, Radio, Terminal } from "lucide-react";
-import { REGION, formatClock } from "@/lib/tariffs";
+import { REGION } from "@/lib/tariffs";
 import { LiveDot, fmtByn } from "@/components/ui";
-import { LaunchModal } from "@/components/LaunchModal";
 
 export function Header({
   liveWatts,
@@ -22,7 +21,6 @@ export function Header({
   streaming: boolean;
 }) {
   const [now, setNow] = useState<Date | null>(null);
-  const [modalOpen, setModalOpen] = useState(false);
 
   useEffect(() => {
     setNow(new Date());
@@ -30,9 +28,17 @@ export function Header({
     return () => window.clearInterval(id);
   }, []);
 
+  const time = now
+    ? new Intl.DateTimeFormat("ru-RU", {
+        timeZone: REGION.timezone,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }).format(now)
+    : "––:––:––";
+
   return (
-    <>
-      <header className="sticky top-0 z-40 border-b border-line-soft bg-ink-950/85 backdrop-blur-md">
+    <header className="sticky top-0 z-40 border-b border-line-soft bg-ink-950/85 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-[1440px] items-center gap-4 px-4 sm:px-6">
         <a href="#live" className="group flex shrink-0 items-center gap-2.5">
           <span className="relative grid h-9 w-9 place-items-center">
@@ -87,24 +93,23 @@ export function Header({
 
           <div className="flex items-center gap-2 rounded border border-line-soft bg-ink-900/70 px-2.5 py-1.5">
             <LiveDot active={streaming} />
-            <span className="font-mono text-[13px] text-chalk tnum">{now ? formatClock(now) : "––:––:––"}</span>
+            <span suppressHydrationWarning className="font-mono text-[13px] text-chalk tnum">
+              {time}
+            </span>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setModalOpen(true)}
+          <a
+            href="/agents"
             className="flex items-center gap-1.5 rounded border border-volt/50 bg-volt/10 px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-volt transition hover:bg-volt/20 hover:text-chalk"
-            title="Инструкция по запуску: браузер, PowerShell, Linux, Python, свой сервер"
+            title="Как запустить агент Windows"
           >
             <Terminal size={12} />
             <span className="hidden sm:inline">Как запускать</span>
             <span className="sm:hidden">Запуск</span>
-          </button>
+          </a>
         </div>
       </div>
       <div className="h-px w-full bg-gradient-to-r from-transparent via-volt/40 to-transparent" />
     </header>
-    <LaunchModal open={modalOpen} onClose={() => setModalOpen(false)} />
-    </>
   );
 }
