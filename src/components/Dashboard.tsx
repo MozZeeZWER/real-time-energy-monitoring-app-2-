@@ -18,7 +18,6 @@ import {
   Terminal,
   Wallet,
 } from "lucide-react";
-import { LaunchModal } from "@/components/LaunchModal";
 import type { DashboardData } from "@/lib/dashboard";
 import { useEnergyCollector } from "@/hooks/useEnergyCollector";
 import { ZONE_META, REGION, formatMinskTs, type TariffKind } from "@/lib/tariffs";
@@ -36,7 +35,6 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
   const [windowMinutes, setWindowMinutes] = useState(15);
   const [busy, setBusy] = useState(false);
   const [lastSync, setLastSync] = useState<number>(() => Date.now());
-  const [launchOpen, setLaunchOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -243,7 +241,7 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
                   <MiniStat label="кВт·ч сегодня" value={fmt(animatedKwh, 4)} accent="text-volt" />
                   <MiniStat label="BYN сегодня" value={fmtByn(animatedCost)} accent="text-amber" />
                   <MiniStat label="сессия · энергия" value={`${fmt(collector.totals.kwh || data.totals.todayKwh, 4)} кВт·ч`} accent="text-cyan" />
-<MiniStat label="сессия · деньги" value={`${fmtByn(collector.totals.cost || data.totals.todayCost)} BYN`} accent="text-amber" />
+                  <MiniStat label="сессия · деньги" value={`${fmtByn(collector.totals.cost || data.totals.todayCost)} BYN`} accent="text-amber" />
                 </div>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   <button
@@ -269,15 +267,14 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
                   >
                     <Download size={12} /> csv
                   </a>
-                  <button
-                    type="button"
-                    onClick={() => setLaunchOpen(true)}
+                  <a
+                    href="/agents"
                     className="flex items-center gap-1.5 rounded border border-cyan/45 bg-cyan/10 px-3 py-1.5 font-mono text-[10.5px] uppercase tracking-wider text-cyan transition hover:bg-cyan/20"
-                    title="Инструкция по запуску: браузер, PowerShell, Linux, Python"
+                    title="Как запустить агент Windows"
                   >
                     <Terminal size={12} />
                     агенты / как запустить
-                  </button>
+                  </a>
                 </div>
                 <p suppressHydrationWarning className="mt-2.5 font-mono text-[10px] leading-relaxed text-fog-dim">
                   {collector.status === "error"
@@ -411,13 +408,12 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
                   hint="Каждое открытое устройство (ПК, ноутбук) шлёт собственные замеры: загрузку процессора и графики, состояние батареи, память, сеть — и расчётную мощность из розетки."
                   right={
                     <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setLaunchOpen(true)}
+                      <a
+                        href="/agents"
                         className="flex items-center gap-1.5 rounded border border-volt/40 bg-volt/10 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider text-volt transition hover:bg-volt/20"
                       >
                         <Terminal size={11} /> + подключить другое устройство
-                      </button>
+                      </a>
                       <span className="flex items-center gap-1.5 rounded border border-line-soft px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider text-fog-dim">
                         <LayoutGrid size={11} /> {data.devices.length} в базе
                       </span>
@@ -703,7 +699,6 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
           </aside>
         </div>
       </div>
-      <LaunchModal open={launchOpen} onClose={() => setLaunchOpen(false)} />
     </>
   );
 }
