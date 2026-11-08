@@ -67,6 +67,7 @@ export interface DeviceCardProps {
   onStress: () => void;
   onPause: () => void;
   onDelete: (id: string) => void;
+  onSetLimit: (id: string, watts: number | null) => void;
 }
 
 export function DeviceCard({
@@ -83,6 +84,7 @@ export function DeviceCard({
   onStress,
   onPause,
   onDelete,
+  onSetLimit,
 }: DeviceCardProps) {
   const [open, setOpen] = useState(false);
   const live = isSelf && reading ? reading : null;
@@ -226,6 +228,32 @@ export function DeviceCard({
               >
                 <Settings2 size={11} />
                 калибровка
+              </button>
+            </>
+          ) : device.source === "plug" ? (
+            <>
+              <label className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-fog">
+                порог
+                <input
+                  key={device.powerLimitW ?? "empty"}
+                  defaultValue={device.powerLimitW ?? ""}
+                  inputMode="decimal"
+                  placeholder="Вт"
+                  onBlur={(event) => {
+                    const raw = event.target.value.trim();
+                    onSetLimit(device.id, raw === "" ? null : Number(raw));
+                  }}
+                  className="w-16 rounded border border-line bg-ink-850 px-1.5 py-1 text-right text-chalk outline-none focus:border-volt"
+                />
+                <span className="text-fog-dim">{device.vendor ?? "розетка"}</span>
+              </label>
+              <button
+                type="button"
+                onClick={() => onDelete(device.id)}
+                title="Удалить устройство и его историю"
+                className="flex items-center gap-1 rounded border border-line px-2 py-1 font-mono text-[10px] text-fog-dim transition hover:border-ember hover:text-ember"
+              >
+                <Trash2 size={11} />
               </button>
             </>
           ) : (

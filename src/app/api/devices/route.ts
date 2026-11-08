@@ -26,6 +26,15 @@ export async function PATCH(req: Request) {
   const kindRaw = body.kind ? String(body.kind) : undefined;
   const kind: DeviceKind | undefined =
     kindRaw === "laptop" || kindRaw === "desktop" || kindRaw === "other" ? kindRaw : undefined;
+  const powerLimitW =
+    "powerLimitW" in body
+      ? body.powerLimitW === null || body.powerLimitW === ""
+        ? null
+        : Math.min(5000, Math.max(1, Number(body.powerLimitW)))
+      : undefined;
+  if (powerLimitW !== undefined && powerLimitW !== null && !Number.isFinite(powerLimitW)) {
+    return Response.json({ ok: false, error: "bad_limit" }, { status: 400 });
+  }
 
   await upsertDevice({
     id,
@@ -35,6 +44,7 @@ export async function PATCH(req: Request) {
     gpuTdpW: typeof body.gpuTdpW === "number" ? Math.min(900, Math.max(0, body.gpuTdpW)) : undefined,
     displayW: typeof body.displayW === "number" ? Math.min(300, Math.max(0, body.displayW)) : undefined,
     batteryWh: typeof body.batteryWh === "number" ? Math.min(400, Math.max(0, body.batteryWh)) : undefined,
+    ...("powerLimitW" in body ? { powerLimitW } : {}),
   });
 
   return Response.json({ ok: true });

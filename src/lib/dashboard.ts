@@ -43,6 +43,10 @@ export interface DeviceLive {
   displayW: number;
   batteryWh: number;
   hasBattery: boolean;
+  source: string;
+  vendor: string | null;
+  externalId: string | null;
+  powerLimitW: number | null;
   lastSeen: string;
   firstSeen: string;
   online: boolean;
@@ -123,6 +127,14 @@ export interface DashboardData {
     zone: string | null;
     rate: number;
     cpuLoad: number;
+  }[];
+  alerts: {
+    ts: string;
+    device: string;
+    watts: number;
+    limitW: number;
+    telegramOk: boolean;
+    webhookOk: boolean;
   }[];
   /** Сводка за весь срок хранения. Каждый измеренный параметр samples, не урезанный набор. */
   year: {
@@ -233,6 +245,7 @@ export async function getDashboard(windowMinutes = 30): Promise<DashboardData> {
     q<Record<string, unknown>>(sql`
       SELECT d.id, d.name, d.kind, d.platform, d.browser, d.cores, d.memory_gb, d.screen,
              d.cpu_tdp_w, d.gpu_tdp_w, d.display_w, d.battery_wh, d.has_battery,
+             d.source, d.vendor, d.external_id, d.power_limit_w,
              d.first_seen, d.last_seen,
              COALESCE(SUM(s.kwh) FILTER (WHERE s.ts >= ${dayStart}), 0) AS today_kwh,
              COALESCE(SUM(s.cost) FILTER (WHERE s.ts >= ${dayStart}), 0) AS today_cost,
@@ -361,6 +374,10 @@ export async function getDashboard(windowMinutes = 30): Promise<DashboardData> {
       displayW: n(d.display_w),
       batteryWh: n(d.battery_wh),
       hasBattery: Boolean(d.has_battery),
+      source: String(d.source ?? "agent"),
+      vendor: d.vendor ? String(d.vendor) : null,
+      externalId: d.external_id ? String(d.external_id) : null,
+      powerLimitW: d.power_limit_w == null ? null : n(d.power_limit_w),
       firstSeen: new Date(String(d.first_seen ?? now)).toISOString(),
       lastSeen: lastSeen.toISOString(),
       online,
@@ -416,6 +433,13 @@ export async function getDashboard(windowMinutes = 30): Promise<DashboardData> {
   const monthDays = Math.max(1, now.getUTCDate());
   const monthForecastCost = (monthCost / monthDays) * 30.4;
   const dayForecastCost = todayCost > 0 ? todayCost : liveWatts * 24 * activeZone.rate / 1000;
+  const alertRows = await q<Record<string, unknown>>(sql`
+    SELECT a.ts, d.name AS device, a.watts, a.limit_w, a.telegram_ok, a.webhook_ok
+    FROM alerts a
+    JOIN devices d ON d.id = a.device_id
+    ORDER BY a.ts DESC
+    LIMIT 8
+  `);
 
   return {
     now: now.toISOString(),
@@ -471,6 +495,14 @@ export async function getDashboard(windowMinutes = 30): Promise<DashboardData> {
       cpuLoad: n(r.cpu_load),
     })),
     series,
+    alerts: alertRows.map((row) => ({
+      ts: new Date(String(row.ts)).toISOString(),
+      device: String(row.device ?? ""),
+      watts: n(row.watts),
+      limitW: n(row.limit_w),
+      telegramOk: Boolean(row.telegram_ok),
+      webhookOk: Boolean(row.webhook_ok),
+    })),
     year: {
       days: settings.retentionDays,
       from: yearStart.toISOString(),

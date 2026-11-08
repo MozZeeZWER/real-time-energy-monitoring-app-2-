@@ -23,6 +23,7 @@ import { useEnergyCollector } from "@/hooks/useEnergyCollector";
 import { ZONE_META, REGION, formatMinskTs, type TariffKind } from "@/lib/tariffs";
 import { DEVICE_COLORS, DailyBars, LiveChart, PowerGauge, ZoneTimeline } from "@/components/charts";
 import { DeviceCard } from "@/components/devices";
+import { CloudPlugs } from "@/components/CloudPlugs";
 import { Header } from "@/components/Header";
 import { TariffPanel } from "@/components/TariffPanel";
 import { LiveDot, Meter, Reveal, SectionTitle, StatTile, fmt, fmtByn, useCountUp, useMounted } from "@/components/ui";
@@ -79,6 +80,14 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
     },
     [windowMinutes],
   );
+
+  const setLimit = useCallback(async (id: string, powerLimitW: number | null) => {
+    await fetch("/api/devices", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, powerLimitW }),
+    });
+  }, []);
 
   const deleteDevice = useCallback(
     async (id: string) => {
@@ -421,6 +430,7 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
                   }
                 />
               </Reveal>
+              <CloudPlugs alerts={data.alerts} />
               {data.devices.length === 0 ? (
                 <div className="panel rounded-md border-dashed p-8 text-center">
                   <p className="font-display text-xl uppercase tracking-wide text-fog">Устройств пока нет</p>
@@ -447,6 +457,7 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
                         onStress={() => collector.runStress(6)}
                         onPause={collector.togglePause}
                         onDelete={deleteDevice}
+                        onSetLimit={setLimit}
                       />
                     </Reveal>
                   ))}
