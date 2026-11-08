@@ -43,6 +43,10 @@ export interface DeviceLive {
   displayW: number;
   batteryWh: number;
   hasBattery: boolean;
+  source: string;
+  vendor: string | null;
+  externalId: string | null;
+  powerLimitW: number | null;
   lastSeen: string;
   firstSeen: string;
   online: boolean;
@@ -86,6 +90,7 @@ export interface DashboardData {
     activeZone: ZoneDef;
     nextZoneChange: { hour: number; zone: ZoneDef } | null;
     availableKinds: TariffKind[];
+    retentionDays: number;
   };
   devices: DeviceLive[];
   totals: {
@@ -123,9 +128,83 @@ export interface DashboardData {
     rate: number;
     cpuLoad: number;
   }[];
+  alerts: {
+    ts: string;
+    device: string;
+    watts: number;
+    limitW: number;
+    telegramOk: boolean;
+    webhookOk: boolean;
+  }[];
+  /** Сводка за весь срок хранения. Каждый измеренный параметр samples, не урезанный набор. */
+  year: {
+    days: number;
+    from: string;
+    samples: number;
+    parameters: YearParameterStat[];
+  };
   series: SeriesPoint[];
   history: typeof TARIFF_HISTORY;
   profiles: { id: string; title: string; short: string; clause: string; typical?: boolean }[];
+}
+
+export interface YearParameterStat {
+  key: string;
+  label: string;
+  unit: string;
+  digits: number;
+  avg: number | null;
+  min: number | null;
+  max: number | null;
+  sum: number | null;
+  /** Для категориальных полей: самое частое значение за срок хранения. */
+  mode: string | null;
+}
+
+function nn(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  const num = typeof v === "string" ? Number(v) : (v as number);
+  return Number.isFinite(num) ? num : null;
+}
+
+function scale(v: number | null, factor: number): number | null {
+  return v === null ? null : v * factor;
+}
+
+function yearParameters(row: Record<string, unknown>, zoneMode: string | null, netMode: string | null): YearParameterStat[] {
+  const stat = (
+    key: string,
+    label: string,
+    unit: string,
+    digits: number,
+    avg: number | null,
+    min: number | null,
+    max: number | null,
+    sum: number | null,
+    mode: string | null = null,
+  ): YearParameterStat => ({ key, label, unit, digits, avg, min, max, sum, mode });
+
+  return [
+    stat("watts", "Мощность из сети", "Вт", 1, nn(row.watts_avg), nn(row.watts_min), nn(row.watts_max), null),
+    stat("battery_watts", "Мощность батареи", "Вт", 1, nn(row.bat_w_avg), nn(row.bat_w_min), nn(row.bat_w_max), null),
+    stat("kwh", "Энергия из сети", "кВт·ч", 4, null, null, null, nn(row.kwh_sum)),
+    stat("battery_kwh", "Энергия батареи", "кВт·ч", 4, null, null, null, nn(row.battery_kwh_sum)),
+    stat("cost", "Стоимость", "BYN", 4, null, null, null, nn(row.cost_sum)),
+    stat("cpu_load", "Загрузка CPU", "%", 1, scale(nn(row.cpu_avg), 100), scale(nn(row.cpu_min), 100), scale(nn(row.cpu_max), 100), null),
+    stat("gpu_load", "Загрузка GPU", "%", 1, scale(nn(row.gpu_avg), 100), scale(nn(row.gpu_min), 100), scale(nn(row.gpu_max), 100), null),
+    stat("fps", "Кадры", "кадр/с", 1, nn(row.fps_avg), nn(row.fps_min), nn(row.fps_max), null),
+    stat("loop_lag_ms", "Лаг цикла", "мс", 1, nn(row.lag_avg), nn(row.lag_min), nn(row.lag_max), null),
+    stat("long_task_ms", "Длинные задачи", "мс", 1, nn(row.long_avg), nn(row.long_min), nn(row.long_max), null),
+    stat("heap_mb", "Куча JS", "МБ", 1, nn(row.heap_avg), nn(row.heap_min), nn(row.heap_max), null),
+    stat("battery_level", "Уровень батареи", "%", 1, scale(nn(row.bat_avg), 100), scale(nn(row.bat_min), 100), scale(nn(row.bat_max), 100), null),
+    stat("charging", "Доля замеров на зарядке", "%", 1, scale(nn(row.charging_share), 100), null, null, null),
+    stat("screen_on", "Доля замеров с экраном", "%", 1, scale(nn(row.screen_share), 100), null, null, null),
+    stat("downlink_mbps", "Входящий канал", "Мбит/с", 2, nn(row.down_avg), nn(row.down_min), nn(row.down_max), null),
+    stat("rtt_ms", "Задержка сети", "мс", 0, nn(row.rtt_avg), nn(row.rtt_min), nn(row.rtt_max), null),
+    stat("tariff_rate", "Ставка", "BYN/кВт·ч", 4, nn(row.rate_avg), nn(row.rate_min), nn(row.rate_max), null),
+    stat("tariff_zone", "Тарифная зона", "", 0, null, null, null, null, zoneMode),
+    stat("net_type", "Тип сети", "", 0, null, null, null, null, netMode),
+  ];
 }
 
 function nextZoneChange(zones: ZoneDef[], now: Date): { hour: number; zone: ZoneDef } | null {
@@ -157,14 +236,16 @@ export async function getDashboard(windowMinutes = 30): Promise<DashboardData> {
 
   const dayStart = minskDayStart(0);
   const monthStart = minskMonthStart();
-  const day14 = minskDayStart(-13);
+  const historyStart = minskDayStart(-(settings.retentionDays - 1));
+  const yearStart = new Date(now.getTime() - settings.retentionDays * 86_400_000);
   const hourAgo = new Date(now.getTime() - 3_600_000);
   const tz = REGION.timezone;
 
-  const [deviceRows, latestRows, hourlyRows, dailyRows, recentRows, overallRows] = await Promise.all([
+  const [deviceRows, latestRows, hourlyRows, dailyRows, recentRows, overallRows, yearRows, zoneModeRows, netModeRows] = await Promise.all([
     q<Record<string, unknown>>(sql`
       SELECT d.id, d.name, d.kind, d.platform, d.browser, d.cores, d.memory_gb, d.screen,
              d.cpu_tdp_w, d.gpu_tdp_w, d.display_w, d.battery_wh, d.has_battery,
+             d.source, d.vendor, d.external_id, d.power_limit_w,
              d.first_seen, d.last_seen,
              COALESCE(SUM(s.kwh) FILTER (WHERE s.ts >= ${dayStart}), 0) AS today_kwh,
              COALESCE(SUM(s.cost) FILTER (WHERE s.ts >= ${dayStart}), 0) AS today_cost,
@@ -205,7 +286,7 @@ export async function getDashboard(windowMinutes = 30): Promise<DashboardData> {
              SUM(s.cost) AS cost,
              MAX(s.watts) AS peak
       FROM samples s
-      WHERE s.ts >= ${day14}
+      WHERE s.ts >= ${historyStart}
       GROUP BY 1, 2
       ORDER BY 1
     `),
@@ -225,6 +306,45 @@ export async function getDashboard(windowMinutes = 30): Promise<DashboardData> {
              COUNT(*) FILTER (WHERE ts >= ${new Date(now.getTime() - 24 * 3_600_000)}) AS cnt24,
              MIN(ts) AS first_ts
       FROM samples
+      WHERE ts >= ${yearStart}
+    `),
+    q<Record<string, unknown>>(sql`
+      SELECT COUNT(*)::int AS samples,
+             AVG(watts) AS watts_avg, MIN(watts) AS watts_min, MAX(watts) AS watts_max,
+             AVG(battery_watts) AS bat_w_avg, MIN(battery_watts) AS bat_w_min, MAX(battery_watts) AS bat_w_max,
+             SUM(kwh) AS kwh_sum,
+             SUM(battery_kwh) AS battery_kwh_sum,
+             SUM(cost) AS cost_sum,
+             AVG(cpu_load) AS cpu_avg, MIN(cpu_load) AS cpu_min, MAX(cpu_load) AS cpu_max,
+             AVG(gpu_load) AS gpu_avg, MIN(gpu_load) AS gpu_min, MAX(gpu_load) AS gpu_max,
+             AVG(fps) AS fps_avg, MIN(fps) AS fps_min, MAX(fps) AS fps_max,
+             AVG(loop_lag_ms) AS lag_avg, MIN(loop_lag_ms) AS lag_min, MAX(loop_lag_ms) AS lag_max,
+             AVG(long_task_ms) AS long_avg, MIN(long_task_ms) AS long_min, MAX(long_task_ms) AS long_max,
+             AVG(heap_mb) AS heap_avg, MIN(heap_mb) AS heap_min, MAX(heap_mb) AS heap_max,
+             AVG(battery_level) AS bat_avg, MIN(battery_level) AS bat_min, MAX(battery_level) AS bat_max,
+             AVG(CASE WHEN charging IS NULL THEN NULL WHEN charging THEN 1.0 ELSE 0.0 END) AS charging_share,
+             AVG(CASE WHEN screen_on IS NULL THEN NULL WHEN screen_on THEN 1.0 ELSE 0.0 END) AS screen_share,
+             AVG(downlink_mbps) AS down_avg, MIN(downlink_mbps) AS down_min, MAX(downlink_mbps) AS down_max,
+             AVG(rtt_ms) AS rtt_avg, MIN(rtt_ms) AS rtt_min, MAX(rtt_ms) AS rtt_max,
+             AVG(tariff_rate) AS rate_avg, MIN(tariff_rate) AS rate_min, MAX(tariff_rate) AS rate_max
+      FROM samples
+      WHERE ts >= ${yearStart}
+    `),
+    q<Record<string, unknown>>(sql`
+      SELECT tariff_zone AS mode, COUNT(*)::int AS c
+      FROM samples
+      WHERE ts >= ${yearStart} AND tariff_zone IS NOT NULL
+      GROUP BY 1
+      ORDER BY c DESC
+      LIMIT 1
+    `),
+    q<Record<string, unknown>>(sql`
+      SELECT net_type AS mode, COUNT(*)::int AS c
+      FROM samples
+      WHERE ts >= ${yearStart} AND net_type IS NOT NULL
+      GROUP BY 1
+      ORDER BY c DESC
+      LIMIT 1
     `),
   ]);
 
@@ -254,6 +374,10 @@ export async function getDashboard(windowMinutes = 30): Promise<DashboardData> {
       displayW: n(d.display_w),
       batteryWh: n(d.battery_wh),
       hasBattery: Boolean(d.has_battery),
+      source: String(d.source ?? "agent"),
+      vendor: d.vendor ? String(d.vendor) : null,
+      externalId: d.external_id ? String(d.external_id) : null,
+      powerLimitW: d.power_limit_w == null ? null : n(d.power_limit_w),
       firstSeen: new Date(String(d.first_seen ?? now)).toISOString(),
       lastSeen: lastSeen.toISOString(),
       online,
@@ -309,6 +433,13 @@ export async function getDashboard(windowMinutes = 30): Promise<DashboardData> {
   const monthDays = Math.max(1, now.getUTCDate());
   const monthForecastCost = (monthCost / monthDays) * 30.4;
   const dayForecastCost = todayCost > 0 ? todayCost : liveWatts * 24 * activeZone.rate / 1000;
+  const alertRows = await q<Record<string, unknown>>(sql`
+    SELECT a.ts, d.name AS device, a.watts, a.limit_w, a.telegram_ok, a.webhook_ok
+    FROM alerts a
+    JOIN devices d ON d.id = a.device_id
+    ORDER BY a.ts DESC
+    LIMIT 8
+  `);
 
   return {
     now: now.toISOString(),
@@ -320,6 +451,7 @@ export async function getDashboard(windowMinutes = 30): Promise<DashboardData> {
       clause: profile.clause,
       legal: profile.legal,
       kind: settings.kind,
+      retentionDays: settings.retentionDays,
       zones,
       activeZone,
       nextZoneChange: nextZoneChange(zones, now),
@@ -363,6 +495,24 @@ export async function getDashboard(windowMinutes = 30): Promise<DashboardData> {
       cpuLoad: n(r.cpu_load),
     })),
     series,
+    alerts: alertRows.map((row) => ({
+      ts: new Date(String(row.ts)).toISOString(),
+      device: String(row.device ?? ""),
+      watts: n(row.watts),
+      limitW: n(row.limit_w),
+      telegramOk: Boolean(row.telegram_ok),
+      webhookOk: Boolean(row.webhook_ok),
+    })),
+    year: {
+      days: settings.retentionDays,
+      from: yearStart.toISOString(),
+      samples: n(yearRows[0]?.samples),
+      parameters: yearParameters(
+        yearRows[0] ?? {},
+        zoneModeRows[0]?.mode ? String(zoneModeRows[0].mode) : null,
+        netModeRows[0]?.mode ? String(netModeRows[0].mode) : null,
+      ),
+    },
     history: TARIFF_HISTORY,
     profiles: TARIFF_PROFILES.map((p) => ({
       id: p.id,

@@ -15,6 +15,11 @@ if ($env:ENERGY_SERVER) { $Server = $env:ENERGY_SERVER.TrimEnd("/") }
 $Server = $Server.TrimEnd("/")
 $IntervalSec = 0.5
 $IngestUrl = $Server + "/api/ingest"
+$IngestSecret = if ($env:INGEST_SECRET) { $env:INGEST_SECRET.Trim() } else { "" }
+if (-not $IngestSecret) {
+  Write-Host "INGEST_SECRET is not set in this window" -ForegroundColor Red
+  exit 1
+}
 
 if (-not ("NativeScreen" -as [type])) {
   Add-Type -TypeDefinition @"
@@ -217,7 +222,7 @@ while ($true) {
     $json = $payload | ConvertTo-Json -Compress -Depth 4
     $ok = $false
     try {
-      $resp = Invoke-RestMethod -Uri $IngestUrl -Method POST -Body $json -ContentType "application/json; charset=utf-8" -TimeoutSec 8
+      $resp = Invoke-RestMethod -Uri $IngestUrl -Method POST -Body $json -ContentType "application/json; charset=utf-8" -Headers @{ "x-ingest-secret" = $IngestSecret } -TimeoutSec 8
       $ok = $true
     } catch {
       $now = Get-Date -Format "HH:mm:ss"

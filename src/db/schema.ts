@@ -32,6 +32,13 @@ export const devices = pgTable(
     displayW: doublePrecision("display_w").notNull().default(22),
     batteryWh: doublePrecision("battery_wh").notNull().default(50),
     hasBattery: boolean("has_battery").notNull().default(false),
+    /** agent — оценка ПК; plug — замер облака Tuya или Shelly. */
+    source: text("source").notNull().default("agent"),
+    vendor: text("vendor"),
+    externalId: text("external_id"),
+    powerLimitW: doublePrecision("power_limit_w"),
+    limitLatched: boolean("limit_latched").notNull().default(false),
+    lastCutoffAt: timestamp("last_cutoff_at", { withTimezone: true }),
     active: boolean("active").notNull().default(true),
     firstSeen: timestamp("first_seen", { withTimezone: true }).notNull().defaultNow(),
     lastSeen: timestamp("last_seen", { withTimezone: true }).notNull().defaultNow(),
@@ -75,6 +82,19 @@ export const samples = pgTable(
   (t) => [index("samples_ts_idx").on(t.ts), index("samples_device_ts_idx").on(t.deviceId, t.ts)],
 );
 
+/** Срабатывание порога розетки. Строка пишется до попытки Telegram и webhook. */
+export const alerts = pgTable("alerts", {
+  id: bigint("id", { mode: "number" }).generatedByDefaultAsIdentity().primaryKey(),
+  deviceId: text("device_id")
+    .notNull()
+    .references(() => devices.id, { onDelete: "cascade" }),
+  ts: timestamp("ts", { withTimezone: true }).notNull().defaultNow(),
+  watts: doublePrecision("watts").notNull(),
+  limitW: doublePrecision("limit_w").notNull(),
+  telegramOk: boolean("telegram_ok").notNull().default(false),
+  webhookOk: boolean("webhook_ok").notNull().default(false),
+});
+
 /** Действующие тарифы (строка на каждую временную зону каждого вида учёта). */
 export const tariffRates = pgTable("tariff_rates", {
   id: text("id").primaryKey(),
@@ -92,12 +112,15 @@ export const tariffRates = pgTable("tariff_rates", {
   validTo: date("valid_to"),
 });
 
+/** Сырые замеры и статистика по ним живут в PostgreSQL этот срок. */
+export const SAMPLE_RETENTION_DAYS = 365;
+
 /** Глобальные настройки расчёта стоимости. */
 export const appSettings = pgTable("app_settings", {
   id: integer("id").primaryKey().default(1),
   profileId: text("profile_id").notNull().default("gas"),
   kind: text("kind").notNull().default("single"),
-  retentionDays: integer("retention_days").notNull().default(21),
+  retentionDays: integer("retention_days").notNull().default(SAMPLE_RETENTION_DAYS),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -108,6 +131,7 @@ export const tariffHistory = pgTable("tariff_history", {
   note: text("note"),
 });
 
+export type Alert = typeof alerts.$inferSelect;
 export type Device = typeof devices.$inferSelect;
 export type Sample = typeof samples.$inferSelect;
 export type TariffRateRow = typeof tariffRates.$inferSelect;
