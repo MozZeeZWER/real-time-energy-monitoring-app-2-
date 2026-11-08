@@ -508,6 +508,7 @@ export function DailyBars({ data }: { data: DailyPoint[] }) {
   const [hover, setHover] = useState<number | null>(null);
   const max = niceMax(Math.max(...data.map((d) => d.kwh), 0.05));
   const zoneIds = ["night", "day", "peak", "flat"];
+  const dense = data.length > 40;
 
   if (!data.length) {
     return (
@@ -517,9 +518,15 @@ export function DailyBars({ data }: { data: DailyPoint[] }) {
     );
   }
 
+  const showLabel = (day: string, index: number) => {
+    if (hover === index) return true;
+    if (!dense) return index % 2 === 0;
+    return day.endsWith("-01");
+  };
+
   return (
     <div className="relative">
-      <div className="flex h-[190px] items-end gap-[3px]">
+      <div className={`flex h-[190px] items-end ${dense ? "gap-px" : "gap-[3px]"}`}>
         {data.map((d, i) => {
           const h = (d.kwh / max) * 100;
           return (
@@ -556,10 +563,10 @@ export function DailyBars({ data }: { data: DailyPoint[] }) {
           );
         })}
       </div>
-      <div className="mt-1.5 flex gap-[3px]">
+      <div className={`mt-1.5 flex ${dense ? "gap-px" : "gap-[3px]"}`}>
         {data.map((d, i) => (
-          <div key={d.day} className="flex-1 text-center font-mono text-[9px] text-fog-dim">
-            {hover === i ? d.day.slice(8) : i % 2 === 0 ? d.day.slice(8) : ""}
+          <div key={d.day} className="flex-1 overflow-hidden text-center font-mono text-[9px] text-fog-dim">
+            {showLabel(d.day, i) ? d.day.slice(5) : ""}
           </div>
         ))}
       </div>

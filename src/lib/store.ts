@@ -1,6 +1,6 @@
 import { and, desc, gte, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { appSettings, devices, samples, tariffHistory, tariffRates } from "@/db/schema";
+import { SAMPLE_RETENTION_DAYS, appSettings, devices, samples, tariffHistory, tariffRates } from "@/db/schema";
 import {
   REGION,
   TARIFF_HISTORY,
@@ -61,8 +61,13 @@ async function runSeed() {
 
   await db
     .insert(appSettings)
-    .values({ id: 1, profileId: "gas", kind: "single" })
+    .values({ id: 1, profileId: "gas", kind: "single", retentionDays: SAMPLE_RETENTION_DAYS })
     .onConflictDoNothing({ target: appSettings.id });
+
+  await db
+    .update(appSettings)
+    .set({ retentionDays: SAMPLE_RETENTION_DAYS, updatedAt: new Date() })
+    .where(and(sql`${appSettings.id} = 1`, lt(appSettings.retentionDays, SAMPLE_RETENTION_DAYS)));
 }
 
 export interface Settings {
@@ -82,7 +87,7 @@ export async function getSettings(): Promise<Settings> {
   const kind: TariffKind = row && kinds.includes(row.kind as TariffKind)
     ? (row.kind as TariffKind)
     : kinds[0] ?? "single";
-  return { profileId, kind, retentionDays: row?.retentionDays ?? 21 };
+  return { profileId, kind, retentionDays: row?.retentionDays ?? SAMPLE_RETENTION_DAYS };
 }
 
 /** Смена тарифа/вида учёта — пересчитываем стоимость всей накопленной истории. */

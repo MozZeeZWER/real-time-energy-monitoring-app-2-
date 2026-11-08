@@ -92,12 +92,15 @@ export const tariffRates = pgTable("tariff_rates", {
   validTo: date("valid_to"),
 });
 
+/** Сырые замеры и статистика по ним живут в PostgreSQL этот срок. */
+export const SAMPLE_RETENTION_DAYS = 365;
+
 /** Глобальные настройки расчёта стоимости. */
 export const appSettings = pgTable("app_settings", {
   id: integer("id").primaryKey().default(1),
   profileId: text("profile_id").notNull().default("gas"),
   kind: text("kind").notNull().default("single"),
-  retentionDays: integer("retention_days").notNull().default(21),
+  retentionDays: integer("retention_days").notNull().default(SAMPLE_RETENTION_DAYS),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

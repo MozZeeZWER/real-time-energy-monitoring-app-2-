@@ -262,7 +262,7 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
                     {collector.paused ? "возобновить" : "остановить сбор"}
                   </button>
                   <a
-                    href="/api/export?days=7"
+                    href="/api/export?days=365"
                     className="flex items-center gap-1.5 rounded border border-line px-3 py-1.5 font-mono text-[10.5px] uppercase tracking-wider text-fog transition hover:border-cyan hover:text-cyan"
                   >
                     <Download size={12} /> csv
@@ -460,7 +460,7 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
                 <SectionTitle
                   index="02"
                   title="Разбор потребления"
-                  hint="Почасовой профиль сегодняшнего дня и суточная история за две недели, окрашенные по тарифным зонам."
+                  hint="Почасовой профиль сегодняшнего дня и суточная история за год хранения. Ниже — сводка по каждому параметру замера."
                 />
               </Reveal>
               <Reveal>
@@ -503,10 +503,10 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
 
                   <div className="panel rounded-md p-4">
                     <h3 className="font-display text-base font-bold uppercase tracking-wide text-chalk">
-                      Последние 14 дней
+                      Год по дням
                     </h3>
                     <p className="mb-3 font-mono text-[10.5px] text-fog-dim">
-                      столбцы сложены по тарифным зонам
+                      {data.settings.retentionDays} дней в PostgreSQL, столбцы по тарифным зонам
                     </p>
                     <DailyBars data={data.daily} />
                     <div className="mt-3 flex flex-wrap gap-3">
@@ -517,6 +517,45 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
                         </span>
                       ))}
                     </div>
+                  </div>
+                </div>
+              </Reveal>
+              <Reveal>
+                <div className="panel mt-3 overflow-hidden rounded-md">
+                  <div className="px-4 pt-4">
+                    <h3 className="font-display text-base font-bold uppercase tracking-wide text-chalk">
+                      Все параметры за {data.year.days} дней
+                    </h3>
+                    <p className="font-mono text-[10.5px] text-fog-dim">
+                      {data.year.samples} замеров в PostgreSQL, строки старше срока удаляются
+                    </p>
+                  </div>
+                  <div className="mt-3 max-h-[420px] overflow-auto">
+                    <table className="w-full border-collapse font-mono text-[11px]">
+                      <thead className="sticky top-0 z-10 bg-ink-850/95 backdrop-blur">
+                        <tr className="text-[9.5px] uppercase tracking-[0.14em] text-fog-dim">
+                          <th className="px-3 py-2 text-left font-medium">параметр</th>
+                          <th className="px-3 py-2 text-right font-medium">среднее</th>
+                          <th className="px-3 py-2 text-right font-medium">мин</th>
+                          <th className="px-3 py-2 text-right font-medium">макс</th>
+                          <th className="px-3 py-2 text-right font-medium">сумма</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.year.parameters.map((row) => (
+                          <tr key={row.key} className="border-t border-line-soft/70">
+                            <td className="px-3 py-1.5 text-chalk">
+                              {row.label}
+                              {row.unit ? <span className="ml-1.5 text-fog-dim">{row.unit}</span> : null}
+                            </td>
+                            <td className="px-3 py-1.5 text-right text-fog tnum">{statText(row.mode ?? row.avg, row.digits)}</td>
+                            <td className="px-3 py-1.5 text-right text-fog tnum">{statText(row.min, row.digits)}</td>
+                            <td className="px-3 py-1.5 text-right text-fog tnum">{statText(row.max, row.digits)}</td>
+                            <td className="px-3 py-1.5 text-right text-chalk tnum">{statText(row.sum, row.digits)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               </Reveal>
@@ -612,7 +651,7 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
                   hint="Последние записи из PostgreSQL: каждые 4 секунды устройство присылает снимок, сервер считает энергию и стоимость по зоне."
                   right={
                     <a
-                      href="/api/export?days=7"
+                      href="/api/export?days=365"
                       className="flex items-center gap-1.5 rounded border border-line px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider text-fog transition hover:border-cyan hover:text-cyan"
                     >
                       <Download size={11} /> выгрузить csv
@@ -701,6 +740,12 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
       </div>
     </>
   );
+}
+
+function statText(value: number | string | null, digits: number): string {
+  if (typeof value === "string") return value;
+  if (value === null) return "—";
+  return fmt(value, digits);
 }
 
 function MiniStat({ label, value, accent }: { label: string; value: string; accent: string }) {

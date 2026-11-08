@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const days = Math.min(60, Math.max(1, Number(url.searchParams.get("days") ?? 7) || 7));
+  const days = Math.min(365, Math.max(1, Number(url.searchParams.get("days") ?? 365) || 365));
   const since = new Date(Date.now() - days * 86_400_000);
 
   const rows = await db
