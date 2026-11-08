@@ -16,6 +16,10 @@ export async function GET(req: Request) {
 # =====================================================================
 
 ENDPOINT="${endpoint}"
+if [ -z "\${INGEST_SECRET}" ]; then
+  echo "INGEST_SECRET is not set" >&2
+  exit 1
+fi
 DEVICE_NAME="$(hostname -s 2>/dev/null || hostname)"
 DEVICE_ID="nix-$(echo "$DEVICE_NAME" | tr '[:upper:]' '[:lower:]')-$USER"
 
@@ -154,7 +158,7 @@ while true; do
 JSON
 )
 
-    RESP=$(curl -s -X POST "$ENDPOINT" -H "Content-Type: application/json" -d "$PAYLOAD" --max-time 4)
+    RESP=$(curl -s -X POST "$ENDPOINT" -H "Content-Type: application/json" -H "x-ingest-secret: \${INGEST_SECRET}" -d "$PAYLOAD" --max-time 4)
     RATE=$(echo "$RESP" | grep -o '"rate":[0-9.]*' | cut -d: -f2)
     ZONE=$(echo "$RESP" | grep -o '"zone":"[^"]*"' | cut -d: -f2 | tr -d '"')
 

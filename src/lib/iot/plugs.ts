@@ -181,7 +181,7 @@ export async function pollPlugs() {
           screenOn: true,
           meta: { userAgent: "EnergyPlug/1.0" },
         },
-        { preserveIdentity: true },
+        { preserveIdentity: true, writer: "poller" as const },
       );
       await enforceLimit({
         deviceId: row.id,

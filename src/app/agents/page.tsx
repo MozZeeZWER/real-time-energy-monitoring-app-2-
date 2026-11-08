@@ -84,6 +84,10 @@ export default function AgentsPage() {
             {copied === "cmd" ? "Скопировано" : "Скопировать команду"}
           </button>
           <p style={hint}>
+            В том же окне, до команды, задайте ключ замера. Он не открывает порог розеток и в скачиваемый файл не попадает.
+          </p>
+          <pre style={pre}>$env:INGEST_SECRET = &quot;значение с сервера&quot;</pre>
+          <p style={hint}>
             Файл на диск не сохраняется. Агент крутится, пока открыто это окно.
             Остановка — Ctrl+C. В шапке должно быть{" "}
             <code style={code}>Server: {origin}</code>, не localhost.

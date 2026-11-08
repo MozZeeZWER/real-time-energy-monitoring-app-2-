@@ -18,6 +18,7 @@ import {
   Terminal,
   Wallet,
 } from "lucide-react";
+import { adminFailure, adminHeaders, readAdminSecret, writeAdminSecret } from "@/lib/admin-client";
 import type { DashboardData } from "@/lib/dashboard";
 import { useEnergyCollector } from "@/hooks/useEnergyCollector";
 import { ZONE_META, REGION, formatMinskTs, type TariffKind } from "@/lib/tariffs";
@@ -36,6 +37,12 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
   const [windowMinutes, setWindowMinutes] = useState(15);
   const [busy, setBusy] = useState(false);
   const [lastSync, setLastSync] = useState<number>(() => Date.now());
+  const [adminSecret, setAdminSecret] = useState("");
+  const [adminError, setAdminError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAdminSecret(readAdminSecret());
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -66,9 +73,14 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
       try {
         const res = await fetch("/api/settings", {
           method: "PATCH",
-          headers: { "content-type": "application/json" },
+          headers: adminHeaders(adminSecret, { "content-type": "application/json" }),
           body: JSON.stringify({ profileId, kind }),
         });
+        const denied = await adminFailure(res);
+        if (denied) {
+          setAdminError(denied);
+          return;
+        }
         if (!res.ok) throw new Error("settings");
         const fresh = await fetch(`/api/dashboard?window=${windowMinutes}`, { cache: "no-store" });
         if (fresh.ok) setData((await fresh.json()) as DashboardData);
@@ -78,25 +90,34 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
         setBusy(false);
       }
     },
-    [windowMinutes],
+    [adminSecret, windowMinutes],
   );
 
   const setLimit = useCallback(async (id: string, powerLimitW: number | null) => {
-    await fetch("/api/devices", {
+    const res = await fetch("/api/devices", {
       method: "PATCH",
-      headers: { "content-type": "application/json" },
+      headers: adminHeaders(adminSecret, { "content-type": "application/json" }),
       body: JSON.stringify({ id, powerLimitW }),
     });
-  }, []);
+    setAdminError(await adminFailure(res));
+  }, [adminSecret]);
 
   const deleteDevice = useCallback(
     async (id: string) => {
       if (id === collector.deviceId) return;
-      await fetch(`/api/devices?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      const res = await fetch(`/api/devices?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: adminHeaders(adminSecret),
+      });
+      const denied = await adminFailure(res);
+      if (denied) {
+        setAdminError(denied);
+        return;
+      }
       const fresh = await fetch(`/api/dashboard?window=${windowMinutes}`, { cache: "no-store" });
       if (fresh.ok) setData((await fresh.json()) as DashboardData);
     },
-    [collector.deviceId, windowMinutes],
+    [adminSecret, collector.deviceId, windowMinutes],
   );
 
   const liveTotal = useMemo(() => {
@@ -430,7 +451,27 @@ export function Dashboard({ initial }: { initial: DashboardData }) {
                   }
                 />
               </Reveal>
-              <CloudPlugs alerts={data.alerts} />
+              <div className="panel mb-3 flex flex-wrap items-center gap-3 rounded-md px-4 py-3">
+                <label className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-fog-dim">
+                  Ключ дашборда
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={adminSecret}
+                    placeholder="ADMIN_SECRET"
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setAdminSecret(next);
+                      writeAdminSecret(next);
+                      setAdminError(null);
+                    }}
+                    className="w-44 rounded border border-line bg-ink-850 px-2 py-1 font-mono text-[12px] normal-case tracking-normal text-chalk outline-none focus:border-volt"
+                  />
+                </label>
+                <p className="text-[12px] text-fog-dim">Порог, удаление, тариф и список розеток. Агент ПК этот ключ не получает.</p>
+                {adminError ? <p className="font-mono text-[11px] text-ember">{adminError}</p> : null}
+              </div>
+              <CloudPlugs alerts={data.alerts} adminSecret={adminSecret} onDenied={setAdminError} />
               {data.devices.length === 0 ? (
                 <div className="panel rounded-md border-dashed p-8 text-center">
                   <p className="font-display text-xl uppercase tracking-wide text-fog">Устройств пока нет</p>

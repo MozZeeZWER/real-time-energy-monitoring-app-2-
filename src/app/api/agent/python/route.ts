@@ -23,6 +23,10 @@ import time
 import urllib.request
 
 ENDPOINT = "${endpoint}"
+INGEST_SECRET = os.environ.get("INGEST_SECRET", "").strip()
+if not INGEST_SECRET:
+    print("INGEST_SECRET is not set")
+    sys.exit(1)
 HOSTNAME = socket.gethostname()
 SYSTEM = platform.system()
 DEVICE_ID = f"py-{SYSTEM.lower()}-{HOSTNAME.lower()}"
@@ -108,7 +112,7 @@ while True:
         req = urllib.request.Request(
             ENDPOINT,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "x-ingest-secret": INGEST_SECRET},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=5) as res:

@@ -1,3 +1,4 @@
+import { denyUnless } from "@/lib/auth";
 import { TARIFF_PROFILES, availableKinds, zonesFor, type TariffKind } from "@/lib/tariffs";
 import { getSettings, updateSettings } from "@/lib/store";
 
@@ -22,6 +23,9 @@ export async function GET() {
 }
 
 export async function PATCH(req: Request) {
+  const denied = denyUnless(req, "ADMIN_SECRET");
+  if (denied) return denied;
+
   let body: Record<string, unknown> = {};
   try {
     body = (await req.json()) as Record<string, unknown>;

@@ -1,9 +1,13 @@
+import { denyUnless } from "@/lib/auth";
 import { discoverPlugs, linkPlugs, startPlugPoller } from "@/lib/iot/plugs";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(req: Request) {
+  const denied = denyUnless(req, "ADMIN_SECRET");
+  if (denied) return denied;
+
   startPlugPoller();
   try {
     const result = await discoverPlugs();
@@ -15,6 +19,9 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  const denied = denyUnless(req, "ADMIN_SECRET");
+  if (denied) return denied;
+
   let body: { devices?: unknown } = {};
   try {
     body = (await req.json()) as { devices?: unknown };

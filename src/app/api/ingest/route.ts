@@ -1,3 +1,4 @@
+import { denyUnless } from "@/lib/auth";
 import { ingest, type IngestPayload } from "@/lib/store";
 import { DEFAULT_SPECS, type DeviceKind } from "@/lib/power-model";
 
@@ -45,6 +46,9 @@ function asBattery01(...candidates: unknown[]): number | null {
 }
 
 export async function POST(req: Request) {
+  const denied = denyUnless(req, "INGEST_SECRET");
+  if (denied) return denied;
+
   let body: Record<string, unknown>;
   try {
     body = (await req.json()) as Record<string, unknown>;
@@ -124,6 +128,7 @@ export async function POST(req: Request) {
 
   try {
     const result = await ingest(payload);
+    if (!result.ok) return Response.json({ ok: false, error: result.error }, { status: 403 });
     return Response.json(result);
   } catch (err) {
     console.error("[ingest] failed", err);

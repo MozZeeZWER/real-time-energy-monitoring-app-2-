@@ -1,6 +1,7 @@
 import { desc, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { devices, samples } from "@/db/schema";
+import { denyUnless } from "@/lib/auth";
 import { upsertDevice } from "@/lib/store";
 import type { DeviceKind } from "@/lib/power-model";
 
@@ -13,6 +14,9 @@ export async function GET() {
 }
 
 export async function PATCH(req: Request) {
+  const denied = denyUnless(req, "ADMIN_SECRET");
+  if (denied) return denied;
+
   let body: Record<string, unknown> = {};
   try {
     body = (await req.json()) as Record<string, unknown>;
@@ -51,6 +55,9 @@ export async function PATCH(req: Request) {
 }
 
 export async function DELETE(req: Request) {
+  const denied = denyUnless(req, "ADMIN_SECRET");
+  if (denied) return denied;
+
   const url = new URL(req.url);
   const id = url.searchParams.get("id");
   if (!id) return Response.json({ ok: false, error: "id_required" }, { status: 400 });

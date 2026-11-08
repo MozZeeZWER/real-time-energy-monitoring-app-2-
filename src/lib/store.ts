@@ -1,6 +1,7 @@
-import { and, desc, gte, lt, sql } from "drizzle-orm";
+import { and, desc, eq, gte, lt, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { SAMPLE_RETENTION_DAYS, appSettings, devices, samples, tariffHistory, tariffRates } from "@/db/schema";
+import { plugWriteForbidden } from "@/lib/plug-write";
 import {
   REGION,
   TARIFF_HISTORY,
@@ -213,8 +214,17 @@ export interface IngestPayload {
 
 export async function ingest(
   payload: IngestPayload,
-  options?: { preserveIdentity?: boolean },
+  options?: { preserveIdentity?: boolean; writer?: "poller" },
 ) {
+  const existing = await db
+    .select({ source: devices.source })
+    .from(devices)
+    .where(eq(devices.id, payload.deviceId))
+    .limit(1);
+  if (plugWriteForbidden(existing[0]?.source, options?.writer)) {
+    return { ok: false as const, error: "plug_ingest_forbidden" as const };
+  }
+
   const settings = await getSettings();
   const zones = zonesFor(settings.profileId, settings.kind);
   const ts = payload.ts ? new Date(payload.ts) : new Date();

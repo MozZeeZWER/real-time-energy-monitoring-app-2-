@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { adminFailure, adminHeaders } from "@/lib/admin-client";
 
 interface ListedPlug {
   vendor: "tuya" | "shelly";
@@ -19,7 +20,15 @@ interface AlertRow {
   webhookOk: boolean;
 }
 
-export function CloudPlugs({ alerts }: { alerts: AlertRow[] }) {
+export function CloudPlugs({
+  alerts,
+  adminSecret,
+  onDenied,
+}: {
+  alerts: AlertRow[];
+  adminSecret: string;
+  onDenied: (message: string | null) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string[]>([]);
@@ -33,7 +42,17 @@ export function CloudPlugs({ alerts }: { alerts: AlertRow[] }) {
     setBusy(true);
     setError([]);
     try {
-      const response = await fetch("/api/iot/plugs", { cache: "no-store" });
+      const response = await fetch("/api/iot/plugs", {
+        cache: "no-store",
+        headers: adminHeaders(adminSecret),
+      });
+      const denied = await adminFailure(response);
+      if (denied) {
+        onDenied(denied);
+        setOpen(false);
+        return;
+      }
+      onDenied(null);
       const json = (await response.json()) as { plugs?: ListedPlug[]; errors?: string[] };
       setPlugs(json.plugs ?? []);
       setError(json.errors ?? []);
@@ -53,7 +72,7 @@ export function CloudPlugs({ alerts }: { alerts: AlertRow[] }) {
     try {
       const response = await fetch("/api/iot/plugs", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: adminHeaders(adminSecret, { "content-type": "application/json" }),
         body: JSON.stringify({
           devices: devices.map((plug) => ({
             vendor: plug.vendor,
@@ -62,7 +81,13 @@ export function CloudPlugs({ alerts }: { alerts: AlertRow[] }) {
           })),
         }),
       });
+      const denied = await adminFailure(response);
+      if (denied) {
+        onDenied(denied);
+        return;
+      }
       if (!response.ok) throw new Error("link");
+      onDenied(null);
       setSaved(devices.length);
       setPicked({});
       await load();
